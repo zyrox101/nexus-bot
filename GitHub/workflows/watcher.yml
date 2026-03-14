@@ -1,3 +1,6 @@
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
 name: Market Watcher
 
 on:
@@ -13,21 +16,18 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v6          # ← updated to v6 (Node 24)
-
-      - name: Set up Python
-        uses: actions/setup-python@v6     # ← updated to v6 (Node 24)
-        with:
-          python-version: '3.11'
+        uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
 
       - name: Run watcher
         env:
           API_KEY: ${{ secrets.API_KEY }}
           API_SECRET: ${{ secrets.API_SECRET }}
-        run: python watcher.py
+        run: python3 watcher.py
 
       - name: Commit and push updated database
         run: |
