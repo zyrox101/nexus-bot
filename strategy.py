@@ -5,6 +5,7 @@ from config import BASE_URL, SYMBOL, CATEGORY, TIMEFRAME
 
 def fetch_klines(limit=200):
     url = f"{BASE_URL}/v5/market/kline"
+
     params = {
         "category": CATEGORY,
         "symbol": SYMBOL,
@@ -12,36 +13,59 @@ def fetch_klines(limit=200):
         "limit": limit
     }
 
-    response = requests.get(url, params=params)
-    data = response.json()
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
 
-    if data["retCode"] != 0:
-        raise Exception(f"API Error: {data}")
+        # Check API response safely
+        if "retCode" not in data or data["retCode"] != 0:
+            print("API Error:", data)
+            return pd.DataFrame()
 
-    klines = data["result"]["list"]
+        klines = data["result"]["list"]
 
-    df = pd.DataFrame(klines, columns=[
-        "timestamp", "open", "high", "low", "close",
-        "volume", "turnover"
-    ])
+        if not klines:
+            print("No kline data returned")
+            return pd.DataFrame()
 
-    df = df.astype({
-        "open": float,
-        "high": float,
-        "low": float,
-        "close": float,
-        "volume": float
-    })
+        df = pd.DataFrame(klines, columns=[
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "turnover"
+        ])
 
-    df = df.sort_values("timestamp")
-    return df
+        df = df.astype({
+            "timestamp": int,
+            "open": float,
+            "high": float,
+            "low": float,
+            "close": float,
+            "volume": float
+        })
+
+        df = df.sort_values("timestamp")
+        df.reset_index(drop=True, inplace=True)
+
+        return df
+
+    except Exception as e:
+        print("Fetch klines error:", e)
+        return pd.DataFrame()
 
 
 def calculate_indicators(df):
-    df["ema9"] = df["close"].ewm(span=9).mean()
-    df["ema21"] = df["close"].ewm(span=21).mean()
+    if df is None or df.empty:
+        return df
+
+    df["ema9"] = df["close"].ewm(span=9, adjust=False).mean()
+    df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
 
     delta = df["close"].diff()
+
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
@@ -55,26 +79,29 @@ def calculate_indicators(df):
 
 
 def generate_signal(df):
+    if df is None or len(df) < 2:
+        return "NONE"
+
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    # LONG
+    # LONG signal
     if (
-        prev["ema9"] < prev["ema21"] and
-        last["ema9"] > last["ema21"] and
-        50 <= last["rsi"] <= 65 and
-        last["close"] > last["ema9"] and
-        last["close"] > last["ema21"]
+        prev["ema9"] < prev["ema21"]
+        and last["ema9"] > last["ema21"]
+        and 50 <= last["rsi"] <= 65
+        and last["close"] > last["ema9"]
+        and last["close"] > last["ema21"]
     ):
         return "LONG"
 
-    # SHORT
+    # SHORT signal
     if (
-        prev["ema9"] > prev["ema21"] and
-        last["ema9"] < last["ema21"] and
-        35 <= last["rsi"] <= 50 and
-        last["close"] < last["ema9"] and
-        last["close"] < last["ema21"]
+        prev["ema9"] > prev["ema21"]
+        and last["ema9"] < last["ema21"]
+        and 35 <= last["rsi"] <= 50
+        and last["close"] < last["ema9"]
+        and last["close"] < last["ema21"]
     ):
         return "SHORT"
 
