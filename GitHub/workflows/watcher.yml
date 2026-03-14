@@ -1,9 +1,5 @@
 name: Market Watcher
 
-# ←←← THIS IS THE FIX (added at the top level)
-env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-
 on:
   schedule:
     - cron: '*/15 * * * *'
@@ -17,10 +13,10 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6          # ← updated to v6 (Node 24)
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6     # ← updated to v6 (Node 24)
         with:
           python-version: '3.11'
 
