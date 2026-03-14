@@ -15,24 +15,49 @@ def init_db():
     conn.close()
 
 def store_latest_data(df):
-    if df.empty:
+    if df is None or df.empty:
         print("No data fetched")
         return
+
     latest = df.iloc[-1]
+
     conn = sqlite3.connect(DB_FILE)
-    conn.execute("INSERT OR REPLACE INTO klines VALUES (?,?,?,?,?,?,?,?,?)",
-                 (int(latest['timestamp']), latest['open'], latest['high'], latest['low'],
-                  latest['close'], latest['volume'], latest['ema9'], latest['ema21'], latest['rsi']))
+    conn.execute(
+        "INSERT OR REPLACE INTO klines VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            int(latest['timestamp']),
+            latest['open'],
+            latest['high'],
+            latest['low'],
+            latest['close'],
+            latest['volume'],
+            latest['ema9'],
+            latest['ema21'],
+            latest['rsi']
+        )
+    )
     conn.commit()
     conn.close()
-    print(f"✅ Stored candle at {datetime.now()}")
+
+    print(f"Stored candle at {datetime.now()}")
 
 def main():
     init_db()
     print("Fetching latest kline...")
-    df = fetch_klines(limit=1)          # only newest candle
-    df = calculate_indicators(df)
-    store_latest_data(df)
+
+    try:
+        df = fetch_klines(limit=1)
+
+        if df is None or df.empty:
+            print("API returned no data")
+            return
+
+        df = calculate_indicators(df)
+
+        store_latest_data(df)
+
+    except Exception as e:
+        print("Error occurred:", e)
 
 if __name__ == "__main__":
     main()
