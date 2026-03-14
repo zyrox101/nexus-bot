@@ -1,7 +1,7 @@
+name: Market Watcher
+
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-
-name: Market Watcher
 
 on:
   schedule:
