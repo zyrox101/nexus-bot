@@ -46,7 +46,7 @@ def main():
     print("Fetching latest kline...")
 
     try:
-        df = fetch_klines(limit=1)
+        df = fetch_klines(limit=50)
 
         if df is None or df.empty:
             print("API returned no data")
