@@ -1,0 +1,1 @@
+from config import BASE_URL, SYMBOL, CATEGORY, TIMEFRAME
