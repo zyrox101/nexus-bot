@@ -1,3 +1,5 @@
 pybit
 pandas
 requests
+flask
+gunicorn
