@@ -1,6 +1,5 @@
-flask
-flask-cors
-requests
-pandas
-ta
 pybit
+pandas
+requests
+flask
+gunicorn
