@@ -17,8 +17,7 @@ def fetch_klines(limit=200):
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
 
-        # Check API response safely
-        if "retCode" not in data or data["retCode"] != 0:
+        if data.get("retCode") != 0:
             print("API Error:", data)
             return pd.DataFrame()
 
@@ -61,11 +60,12 @@ def calculate_indicators(df):
     if df is None or df.empty:
         return df
 
+    # EMA
     df["ema9"] = df["close"].ewm(span=9, adjust=False).mean()
     df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
 
+    # RSI
     delta = df["close"].diff()
-
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
@@ -80,29 +80,25 @@ def calculate_indicators(df):
 
 def generate_signal(df):
     if df is None or len(df) < 2:
-        return "NONE"
+        return "HOLD"
 
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    # LONG signal
+    # BUY (LONG)
     if (
         prev["ema9"] < prev["ema21"]
         and last["ema9"] > last["ema21"]
-        and 50 <= last["rsi"] <= 65
-        and last["close"] > last["ema9"]
-        and last["close"] > last["ema21"]
+        and 45 <= last["rsi"] <= 65
     ):
-        return "LONG"
+        return "BUY"
 
-    # SHORT signal
+    # SELL (SHORT)
     if (
         prev["ema9"] > prev["ema21"]
         and last["ema9"] < last["ema21"]
-        and 35 <= last["rsi"] <= 50
-        and last["close"] < last["ema9"]
-        and last["close"] < last["ema21"]
+        and 35 <= last["rsi"] <= 55
     ):
-        return "SHORT"
+        return "SELL"
 
-    return "NONE"
+    return "HOLD"
