@@ -71,6 +71,11 @@ def stop_bot():
     bot.stop()
     return jsonify({"message": "Bot stopped"})
 
-# ---------------- IMPORTANT ----------------
-# DO NOT USE app.run() ON PYTHONANYWHERE
+# ---------------- FOR RAILWAY ----------------
+
+import os
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
 
