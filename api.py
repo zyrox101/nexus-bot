@@ -1,46 +1,25 @@
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 from watcher import Bot
 import threading
+import os
 
 app = Flask(__name__)
 CORS(app)
 
-# Initialize bot
-bot = Bot(test_mode=False)
+# ---------------- BOT ----------------
+bot = Bot(test_mode=False)  # set False for real trading
+bot_thread = None
 
-# Run bot in background thread
 def run_bot():
     bot.start()
 
-thread = threading.Thread(target=run_bot, daemon=True)
-thread.start()
-
-# ---------------- WEB PAGE ----------------
+# ---------------- DASHBOARD ----------------
 @app.route('/')
 def home():
-    return render_template_string(f"""
-    <h1>🚀 Nexus Trading Bot</h1>
+    return render_template('index.html')
 
-    <p><b>Status:</b> {"Running" if bot.is_running else "Stopped"}</p>
-    <p><b>Balance:</b> ${bot.balance}</p>
-    <p><b>Signal:</b> {bot.current_signal}</p>
-
-    <h2>Controls</h2>
-    <form action="/start" method="post">
-        <button type="submit">Start Bot</button>
-    </form>
-
-    <form action="/stop" method="post">
-        <button type="submit">Stop Bot</button>
-    </form>
-
-    <h2>Trades</h2>
-    <pre>{bot.trade_history}</pre>
-    """)
-
-# ---------------- API ENDPOINTS ----------------
-
+# ---------------- API ----------------
 @app.route('/status')
 def status():
     return jsonify({
@@ -50,20 +29,23 @@ def status():
 
 @app.route('/balance')
 def balance():
+    # For live Bybit, bot.balance will reflect real funds
     return jsonify({
-        "balance": bot.balance
+        "balance": round(bot.balance, 2)
     })
 
 @app.route('/trades')
 def trades():
-    return jsonify(bot.trade_history)
+    # Return latest 10 trades
+    return jsonify(bot.trade_history[-10:][::-1])
 
 # ---------------- CONTROLS ----------------
-
 @app.route('/start', methods=['POST'])
 def start_bot():
+    global bot_thread
     if not bot.is_running:
-        threading.Thread(target=bot.start, daemon=True).start()
+        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot_thread.start()
     return jsonify({"message": "Bot started"})
 
 @app.route('/stop', methods=['POST'])
@@ -71,12 +53,7 @@ def stop_bot():
     bot.stop()
     return jsonify({"message": "Bot stopped"})
 
-# ---------------- FOR RAILWAY ----------------
-
-import os
-
+# ---------------- RUN ----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
-
-
