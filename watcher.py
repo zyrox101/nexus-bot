@@ -89,7 +89,7 @@ class Bot:
 
     # ---------------- MARKET DATA ----------------
     def fetch_klines(self, symbol="BTCUSDT", limit=50):
-        url = f"{BASE_URL}/v5/market/kline?symbol={symbol}&interval=1&limit={limit}&category=linear"
+        url = f"{BASE_URL}/v5/market/kline?symbol={symbol}&interval=1m&limit={limit}&category=linear"
         r = requests.get(url).json()
 
         data = r["result"]["list"]
@@ -221,4 +221,5 @@ class Bot:
     def stop(self):
         self.is_running = False
         print("Bot stopped")
+
 
