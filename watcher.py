@@ -89,24 +89,59 @@ class Bot:
 
     # ---------------- MARKET DATA ----------------
     def fetch_klines(self, symbol="BTCUSDT", limit=50):
-        url = f"{BASE_URL}/v5/market/kline?symbol={symbol}&interval=1m&limit={limit}&category=linear"
-        r = requests.get(url).json()
+    url = f"{BASE_URL}/v5/market/kline"
 
-        data = r["result"]["list"]
-        if not data:
+    params = {
+        "category": "linear",
+        "symbol": symbol,
+        "interval": "1",
+        "limit": limit
+    }
+
+    try:
+        r = requests.get(url, params=params)
+
+        # 🔍 DEBUG (IMPORTANT)
+        print("RAW RESPONSE:", r.text)
+
+        if r.status_code != 200:
+            print(f"HTTP Error: {r.status_code}")
             return None
 
-        df = pd.DataFrame(data)
+        data = r.json()
+
+        if data.get("retCode") != 0:
+            print("Bybit Error:", data)
+            return None
+
+        klines = data["result"]["list"]
+
+        if not klines:
+            return None
+
+        df = pd.DataFrame(klines)
         df = df.iloc[::-1]
 
-        df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
+        df.columns = [
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "turnover"
+        ]
 
-        for col in ["open", "high", "low", "close", "volume"]:
+        for col in ["timestamp", "open", "high", "low", "close", "volume"]:
             df[col] = df[col].astype(float)
 
         df["timestamp"] = df["timestamp"].astype(int)
 
         return df
+
+    except Exception as e:
+        print(f"Fetch Error ({symbol}):", e)
+        return None
 
     # ---------------- INDICATORS ----------------
     def calculate_indicators(self, df):
