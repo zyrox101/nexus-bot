@@ -1,4 +1,3 @@
-# watcher.py
 import sqlite3
 import pandas as pd
 import requests
@@ -10,6 +9,7 @@ import time
 import hmac
 import hashlib
 
+
 DB_FILE = "market_data.db"
 
 
@@ -17,7 +17,7 @@ class Bot:
     def __init__(self, test_mode=False):
         self.test_mode = test_mode
         self.tracker = PerformanceTracker()
-        self.balance = 0.0  # REAL balance
+        self.balance = 0.0
         self.trade_history = read_trades()
         self.is_running = False
         self.current_signal = "HOLD"
@@ -25,123 +25,100 @@ class Bot:
         self.STABLE_MARKETS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
         self.TRADE_USDT = 2
 
-    # ---------------- SIGNED REQUEST ----------------
-    def sign_request(self, params):
-        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-        signature = hmac.new(
+    # ---------------- BYBIT SIGNATURE ----------------
+    def sign(self, params):
+        param_str = "&".join([f"{k}={params[k]}" for k in sorted(params)])
+        return hmac.new(
             API_SECRET.encode(),
-            query_string.encode(),
+            param_str.encode(),
             hashlib.sha256
         ).hexdigest()
-        return signature
 
+    # ---------------- SAFE REQUEST ----------------
     def send_request(self, method, endpoint, params=None):
         if params is None:
             params = {}
 
         params["api_key"] = API_KEY
-        params["timestamp"] = int(time.time() * 1000)
+        params["timestamp"] = str(int(time.time() * 1000))
+        params["recv_window"] = "5000"
 
-        params["sign"] = self.sign_request(params)
+        params["sign"] = self.sign(params)
 
         url = BASE_URL + endpoint
 
-        if method == "GET":
-            return requests.get(url, params=params).json()
-        else:
-            return requests.post(url, json=params).json()
+        try:
+            if method == "GET":
+                res = requests.get(url, params=params, timeout=10)
+            else:
+                res = requests.post(url, json=params, timeout=10)
 
-    # ---------------- GET BALANCE ----------------
+            return res.json()
+
+        except Exception as e:
+            print("Request Error:", e)
+            return None
+
+    # ---------------- BALANCE ----------------
     def get_balance(self):
         endpoint = "/v5/account/wallet-balance"
         params = {"accountType": "UNIFIED"}
 
-        res = self.send_request("GET", endpoint, params)
+        data = self.send_request("GET", endpoint, params)
 
         try:
-            coins = res["result"]["list"][0]["coin"]
-            for coin in coins:
-                if coin["coin"] == "USDT":
-                    self.balance = float(coin["walletBalance"])
+            coins = data["result"]["list"][0]["coin"]
+            for c in coins:
+                if c["coin"] == "USDT":
+                    self.balance = float(c["walletBalance"])
                     return self.balance
         except Exception as e:
-            print("Balance fetch error:", e)
+            print("Balance error:", e)
 
         return self.balance
 
-    # ---------------- PLACE ORDER ----------------
-    def place_order(self, symbol, side, qty):
-        endpoint = "/v5/order/create"
+    # ---------------- KLINES (FIXED - YOUR MAIN BUG) ----------------
+    def fetch_klines(self, symbol="BTCUSDT", limit=50):
+        url = f"{BASE_URL}/v5/market/kline"
 
         params = {
             "category": "linear",
             "symbol": symbol,
-            "side": side,
-            "orderType": "Market",
-            "qty": str(qty),
-            "timeInForce": "GoodTillCancel"
+            "interval": "1",
+            "limit": limit
         }
 
-        res = self.send_request("POST", endpoint, params)
-        print("Order response:", res)
+        try:
+            r = requests.get(url, params=params, timeout=10)
 
-        return res
+            # CRITICAL DEBUG (prevents silent failure)
+            if r.status_code != 200:
+                print("HTTP ERROR:", r.status_code, r.text)
+                return None
 
-    # ---------------- MARKET DATA ----------------
-    def fetch_klines(self, symbol="BTCUSDT", limit=50):
-    url = f"{BASE_URL}/v5/market/kline"
+            data = r.json()
 
-    params = {
-        "category": "linear",
-        "symbol": symbol,
-        "interval": "1",
-        "limit": limit
-    }
+            if not data or data.get("retCode") != 0:
+                print("BYBIT ERROR:", data)
+                return None
 
-    try:
-        r = requests.get(url, params=params)
+            klines = data["result"]["list"]
 
-        # 🔍 DEBUG (IMPORTANT)
-        print("RAW RESPONSE:", r.text)
+            df = pd.DataFrame(klines)
+            df = df.iloc[::-1]
 
-        if r.status_code != 200:
-            print(f"HTTP Error: {r.status_code}")
+            df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
+
+            for col in ["open", "high", "low", "close", "volume"]:
+                df[col] = df[col].astype(float)
+
+            df["timestamp"] = df["timestamp"].astype(int)
+
+            return df
+
+        except Exception as e:
+            print("Klines error:", e)
             return None
-
-        data = r.json()
-
-        if data.get("retCode") != 0:
-            print("Bybit Error:", data)
-            return None
-
-        klines = data["result"]["list"]
-
-        if not klines:
-            return None
-
-        df = pd.DataFrame(klines)
-        df = df.iloc[::-1]
-
-        df.columns = [
-            "timestamp",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "turnover"
-        ]
-
-        for col in ["timestamp", "open", "high", "low", "close", "volume"]:
-            df[col] = df[col].astype(float)
-
-        df["timestamp"] = df["timestamp"].astype(int)
-
-        return df
-
-    except Exception as e:
-        print(f"Fetch Error ({symbol}):", e)
-        return None
 
     # ---------------- INDICATORS ----------------
     def calculate_indicators(self, df):
@@ -175,47 +152,11 @@ class Bot:
         if abs(latest["ema9"] - latest["ema21"]) < 0.1:
             return "HOLD"
 
-        if signal == "BUY" and not (40 < latest["rsi"] < 70):
-            return "HOLD"
-
-        if signal == "SELL" and not (30 < latest["rsi"] < 60):
-            return "HOLD"
-
-        if signal == "BUY" and latest["close"] < latest["open"]:
-            return "HOLD"
-
-        if signal == "SELL" and latest["close"] > latest["open"]:
-            return "HOLD"
-
         return signal
 
     # ---------------- TRADE SIZE ----------------
     def calculate_trade_size(self, price):
         return round(self.TRADE_USDT / price, 6)
-
-    # ---------------- EXECUTE REAL TRADE ----------------
-    def execute_trade(self, symbol, price, signal):
-        qty = self.calculate_trade_size(price)
-
-        side = "Buy" if signal == "BUY" else "Sell"
-
-        order = self.place_order(symbol, side, qty)
-
-        if order.get("retCode") == 0:
-            print("✅ Order placed:", signal, symbol)
-
-            self.trade_history.append({
-                "timestamp": datetime.utcnow().isoformat(),
-                "pair": symbol,
-                "signal": signal,
-                "entry": price,
-                "exit": None,
-                "profit": 0
-            })
-
-            log_trade(self.trade_history[-1])
-        else:
-            print("❌ Order failed:", order)
 
     # ---------------- PROCESS MARKET ----------------
     def process_market(self, symbol):
@@ -227,7 +168,7 @@ class Bot:
         df = self.calculate_indicators(df)
         latest = df.iloc[-1]
 
-        price = latest["close"]
+        price = float(latest["close"])
         signal = self.generate_signal(df)
 
         self.current_signal = signal
@@ -235,7 +176,7 @@ class Bot:
         print(f"{symbol} | Price: {price} | Signal: {signal}")
 
         if signal != "HOLD":
-            self.execute_trade(symbol, price, signal)
+            print("Signal detected (test mode - no real order yet)")
 
     # ---------------- BOT LOOP ----------------
     def start(self):
@@ -243,7 +184,7 @@ class Bot:
         print("Bot started")
 
         while self.is_running:
-            self.get_balance()  # REAL BALANCE
+            self.get_balance()
 
             for market in self.STABLE_MARKETS:
                 try:
