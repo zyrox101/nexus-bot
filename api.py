@@ -1,11 +1,9 @@
-from flask import Flask, jsonify, request, render_template
-from flask_cors import CORS
-from watcher import Bot
+from flask import Flask, jsonify, render_template
 import threading
 import os
+from watcher import Bot
 
 app = Flask(__name__)
-CORS(app)
 
 # ---------------- BOT ----------------
 bot = Bot(test_mode=False)
@@ -13,16 +11,17 @@ bot_thread = None
 
 
 def run_bot():
+    print("🚀 Bot thread started")
     bot.start()
 
 
-# ---------------- DASHBOARD ----------------
+# ---------------- HOME ----------------
 @app.route('/')
 def home():
     return render_template('index.html')
 
 
-# ---------------- API ----------------
+# ---------------- STATUS ----------------
 @app.route('/status')
 def status():
     return jsonify({
@@ -31,6 +30,7 @@ def status():
     })
 
 
+# ---------------- BALANCE ----------------
 @app.route('/balance')
 def balance():
     return jsonify({
@@ -38,34 +38,43 @@ def balance():
     })
 
 
+# ---------------- TRADES ----------------
 @app.route('/trades')
 def trades():
     return jsonify(bot.trade_history[-10:][::-1])
 
 
-# ---------------- CONTROLS ----------------
-@app.route('/start', methods=['POST'])
+# ---------------- START BOT ----------------
+@app.route("/start", methods=["POST"])
 def start_bot():
     global bot_thread
 
-    if not bot.is_running:
-        bot_thread = threading.Thread(target=run_bot, daemon=True)
-        bot_thread.start()
+    if bot.is_running:
+        return jsonify({"status": "already running"})
 
-    return jsonify({"message": "Bot started"})
+    bot.is_running = True
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+
+    return jsonify({"status": "bot started"})
 
 
-@app.route('/stop', methods=['POST'])
+# ---------------- STOP BOT ----------------
+@app.route("/stop", methods=["POST"])
 def stop_bot():
     bot.stop()
-    return jsonify({"message": "Bot stopped"})
+    return jsonify({"status": "bot stopped"})
 
 
-# ---------------- AUTO START (IMPORTANT) ----------------
+# ---------------- AUTO START (SAFE) ----------------
 def auto_start():
     global bot_thread
+
     if not bot.is_running:
-        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot.is_running = True
+        bot_thread = threading.Thread(target=run_bot)
+        bot_thread.daemon = True
         bot_thread.start()
         print("🚀 Bot auto-started")
 
@@ -77,5 +86,3 @@ auto_start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
-
-
