@@ -1,7 +1,6 @@
-import sqlite3
+import time
 import pandas as pd
 import requests
-import time
 import hmac
 import hashlib
 
@@ -9,38 +8,42 @@ from config import *
 from performance import PerformanceTracker
 from trade_logger import log_trade, read_trades
 
-DB_FILE = "market_data.db"
-
 
 class Bot:
     def __init__(self, test_mode=False):
         self.test_mode = test_mode
         self.tracker = PerformanceTracker()
 
-        # 🔥 FIX: start balance from tracker or default
-        self.balance = 20.0 if test_mode else 0.0
+        # ---------------- BALANCE ----------------
+        # FIX: no fake balance
+        self.balance = self.tracker.get_initial_balance() if test_mode else 0.0
 
         self.trade_history = read_trades()
         self.is_running = False
         self.current_signal = "HOLD"
 
+        # ---------------- MARKETS ----------------
         self.STABLE_MARKETS = ["BTCUSDT", "ETHUSDT"]
 
-        # FIX: dynamic risk instead of fixed
-        self.BASE_RISK = 0.02  # 2% per trade max
+        # ---------------- RISK ----------------
+        self.BASE_RISK = 0.02
+        self.cooldown = 20
         self.last_trade_time = 0
-        self.cooldown = 20  # seconds between trades
 
-        self.position = {}  # track open positions per symbol
+        # ---------------- POSITIONS (FIXED) ----------------
+        self.positions = {}  # {symbol: {"side": BUY/SELL, "entry": price}}
+
+        # ---------------- HEARTBEAT ----------------
+        self.last_heartbeat = time.time()
 
     # ---------------- SIGNATURE ----------------
     def sign(self, params):
         sorted_params = dict(sorted(params.items()))
-        param_str = "&".join([f"{k}={v}" for k, v in sorted_params.items()])
+        query = "&".join([f"{k}={v}" for k, v in sorted_params.items()])
 
         return hmac.new(
             API_SECRET.encode(),
-            param_str.encode(),
+            query.encode(),
             hashlib.sha256
         ).hexdigest()
 
@@ -62,21 +65,17 @@ class Bot:
             else:
                 res = requests.post(url, json=params, timeout=10)
 
-            if res.status_code != 200:
-                return None
-
-            return res.json()
+            return res.json() if res.status_code == 200 else None
 
         except Exception as e:
-            print("❌ Request Error:", e)
+            print("Request Error:", e)
             return None
 
     # ---------------- BALANCE ----------------
     def get_balance(self):
-        endpoint = "/v5/account/wallet-balance"
-        params = {"accountType": "UNIFIED"}
-
-        data = self.send_request("GET", endpoint, params)
+        data = self.send_request("GET", "/v5/account/wallet-balance", {
+            "accountType": "UNIFIED"
+        })
 
         try:
             coins = data["result"]["list"][0]["coin"]
@@ -89,29 +88,8 @@ class Bot:
 
         return self.balance
 
-    # ---------------- ORDER ----------------
-    def place_order(self, side, qty, symbol="BTCUSDT"):
-        endpoint = "/v5/order/create"
-
-        params = {
-            "category": "linear",
-            "symbol": symbol,
-            "side": side,
-            "orderType": "Market",
-            "qty": str(qty)
-        }
-
-        response = self.send_request("POST", endpoint, params)
-
-        if not response or response.get("retCode") != 0:
-            print("❌ ORDER FAILED:", response)
-            return None
-
-        print("✅ ORDER EXECUTED:", side, qty, symbol)
-        return response["result"]
-
     # ---------------- MARKET DATA ----------------
-    def fetch_klines(self, symbol="BTCUSDT", limit=50):
+    def fetch_klines(self, symbol, limit=50):
         url = f"{BASE_URL}/v5/market/kline"
 
         params = {
@@ -125,8 +103,7 @@ class Bot:
             r = requests.get(url, params=params, timeout=10)
             data = r.json()
 
-            klines = data["result"]["list"]
-            df = pd.DataFrame(klines)
+            df = pd.DataFrame(data["result"]["list"])
             df = df.iloc[::-1]
 
             df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
@@ -140,91 +117,157 @@ class Bot:
             return None
 
     # ---------------- INDICATORS ----------------
-    def calculate_indicators(self, df):
+    def indicators(self, df):
         df["ema9"] = df["close"].ewm(span=9).mean()
         df["ema21"] = df["close"].ewm(span=21).mean()
-
         return df
 
-    # ---------------- SIGNAL (IMPROVED) ----------------
-    def generate_signal(self, df):
+    # ---------------- STRONGER SIGNAL ----------------
+    def signal(self, df):
         latest = df.iloc[-1]
         prev = df.iloc[-2]
 
-        ema9 = latest["ema9"]
-        ema21 = latest["ema21"]
+        # confirmation crossover
+        bullish = latest["ema9"] > latest["ema21"] and prev["ema9"] <= prev["ema21"]
+        bearish = latest["ema9"] < latest["ema21"] and prev["ema9"] >= prev["ema21"]
 
-        # FIX: stronger trend confirmation
-        if ema9 > ema21 and latest["close"] > ema9:
+        if bullish:
             return "BUY"
-
-        if ema9 < ema21 and latest["close"] < ema9:
+        if bearish:
             return "SELL"
 
         return "HOLD"
 
-    # ---------------- RISK CONTROL ----------------
-    def calculate_trade_size(self, price):
-        risk_amount = self.balance * self.BASE_RISK
-
-        qty = risk_amount / price
-
+    # ---------------- RISK ----------------
+    def trade_size(self, price):
+        risk = self.balance * self.BASE_RISK
+        qty = risk / price
         return round(max(qty, 0.001), 6)
 
-    # ---------------- MARKET PROCESS ----------------
-    def process_market(self, symbol):
+    # ---------------- EXIT STRATEGY ----------------
+    def check_exit(self, symbol, price, ema9, ema21):
+        if symbol not in self.positions:
+            return
+
+        pos = self.positions[symbol]
+        entry = pos["entry"]
+        side = pos["side"]
+
+        # TP / SL
+        tp = entry * 1.01
+        sl = entry * 0.995
+
+        exit_trade = False
+
+        if side == "BUY":
+            if price >= tp or price <= sl or ema9 < ema21:
+                exit_trade = True
+
+        if side == "SELL":
+            if price <= entry * 0.99 or price >= entry * 1.005 or ema9 > ema21:
+                exit_trade = True
+
+        if exit_trade:
+            close_side = "Sell" if side == "BUY" else "Buy"
+
+            self.place_order(close_side, self.trade_size(price), symbol)
+
+            log_trade({
+                "symbol": symbol,
+                "type": "EXIT",
+                "side": close_side,
+                "price": price,
+                "balance": self.balance,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            })
+
+            del self.positions[symbol]
+
+    # ---------------- ORDER ----------------
+    def place_order(self, side, qty, symbol):
+        res = self.send_request("POST", "/v5/order/create", {
+            "category": "linear",
+            "symbol": symbol,
+            "side": side,
+            "orderType": "Market",
+            "qty": str(qty)
+        })
+
+        if not res or res.get("retCode") != 0:
+            print("ORDER FAILED:", res)
+            return None
+
+        print("ORDER EXECUTED:", side, symbol, qty)
+        return res
+
+    # ---------------- PROCESS MARKET ----------------
+    def process(self, symbol):
         df = self.fetch_klines(symbol)
         if df is None or len(df) < 30:
             return
 
-        df = self.calculate_indicators(df)
+        df = self.indicators(df)
 
-        price = float(df.iloc[-1]["close"])
-        signal = self.generate_signal(df)
+        price = df.iloc[-1]["close"]
+        ema9 = df.iloc[-1]["ema9"]
+        ema21 = df.iloc[-1]["ema21"]
 
+        signal = self.signal(df)
         self.current_signal = signal
 
-        print(f"{symbol} | Price: {price} | Signal: {signal}")
+        print(f"{symbol} | {price} | {signal}")
 
-        # 🔥 COOLDOWN FIX
+        # EXIT FIRST
+        self.check_exit(symbol, price, ema9, ema21)
+
+        # cooldown
         if time.time() - self.last_trade_time < self.cooldown:
             return
 
-        # 🔥 PREVENT SAME POSITION STACKING
-        if symbol in self.position and self.position[symbol] == signal:
-            return
+        # entry logic
+        if signal in ["BUY", "SELL"] and symbol not in self.positions:
 
-        if signal in ["BUY", "SELL"]:
-            qty = self.calculate_trade_size(price)
-
+            qty = self.trade_size(price)
             side = "Buy" if signal == "BUY" else "Sell"
 
-            result = self.place_order(side, qty, symbol)
+            res = self.place_order(side, qty, symbol)
 
-            if result:
-                self.position[symbol] = signal
+            if res:
+                self.positions[symbol] = {
+                    "side": signal,
+                    "entry": price
+                }
+
+                log_trade({
+                    "symbol": symbol,
+                    "type": "ENTRY",
+                    "side": side,
+                    "price": price,
+                    "balance": self.balance,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                })
+
                 self.last_trade_time = time.time()
 
     # ---------------- LOOP ----------------
     def start(self):
         self.is_running = True
-        print("🚀 Bot started")
+        print("BOT STARTED 🚀")
 
         while self.is_running:
             self.get_balance()
 
-            print(f"💰 Balance: {self.balance}")
+            print(f"BALANCE: {self.balance}")
 
-            for market in self.STABLE_MARKETS:
-                self.process_market(market)
+            for m in self.STABLE_MARKETS:
+                self.process(m)
 
-            time.sleep(10)  # FIX: reduced spam trading frequency
+            # HEARTBEAT FIX
+            self.last_heartbeat = time.time()
+            print("HEARTBEAT ✔ BOT ALIVE")
+
+            time.sleep(10)
 
     def stop(self):
         self.is_running = False
-        print("🛑 Bot stopped")
-
-
-if __name__ == "__main__":
-    bot = Bot(test_mode=False)
-    bot.start()
+        print("BOT STOPPED 🛑")
