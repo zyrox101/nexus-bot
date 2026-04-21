@@ -1,18 +1,54 @@
 from flask import Flask, jsonify, render_template
 import threading
 import os
+import time
+
 from watcher import Bot
 
 app = Flask(__name__)
 
-# ---------------- BOT ----------------
+# ---------------- BOT INSTANCE ----------------
 bot = Bot(test_mode=False)
+
 bot_thread = None
+bot_lock = threading.Lock()
+
+# ---------------- LIVE LOG STORE ----------------
+live_logs = []
 
 
+def log_event(event):
+    """Store live bot events for UI"""
+    global live_logs
+
+    live_logs.append({
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "event": event
+    })
+
+    # keep only last 100 logs
+    if len(live_logs) > 100:
+        live_logs = live_logs[-100:]
+
+
+# ---------------- WRAPPED BOT LOOP ----------------
 def run_bot():
-    print("🚀 Bot thread started")
-    bot.start()
+    log_event("BOT_THREAD_STARTED")
+
+    while bot.is_running:
+        try:
+            bot.get_balance()
+            log_event(f"BALANCE_UPDATE: {bot.balance}")
+
+            for market in bot.STABLE_MARKETS:
+                bot.process_market(market)
+
+            log_event(f"SIGNAL: {bot.current_signal}")
+
+            time.sleep(10)
+
+        except Exception as e:
+            log_event(f"ERROR: {str(e)}")
 
 
 # ---------------- HOME ----------------
@@ -44,18 +80,28 @@ def trades():
     return jsonify(bot.trade_history[-10:][::-1])
 
 
-# ---------------- START BOT ----------------
+# ---------------- LIVE LOGS (NEW FIX) ----------------
+@app.route('/logs')
+def logs():
+    return jsonify(live_logs[-50:][::-1])
+
+
+# ---------------- START BOT (SAFE FIX) ----------------
 @app.route("/start", methods=["POST"])
 def start_bot():
     global bot_thread
 
-    if bot.is_running:
-        return jsonify({"status": "already running"})
+    with bot_lock:
+        if bot.is_running:
+            return jsonify({"status": "already running"})
 
-    bot.is_running = True
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
+        bot.is_running = True
+
+        bot_thread = threading.Thread(target=run_bot)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        log_event("BOT_STARTED")
 
     return jsonify({"status": "bot started"})
 
@@ -63,20 +109,27 @@ def start_bot():
 # ---------------- STOP BOT ----------------
 @app.route("/stop", methods=["POST"])
 def stop_bot():
-    bot.stop()
+    with bot_lock:
+        bot.stop()
+        log_event("BOT_STOPPED")
+
     return jsonify({"status": "bot stopped"})
 
 
-# ---------------- AUTO START (SAFE) ----------------
+# ---------------- AUTO START (SAFE FIX) ----------------
 def auto_start():
     global bot_thread
 
-    if not bot.is_running:
-        bot.is_running = True
-        bot_thread = threading.Thread(target=run_bot)
-        bot_thread.daemon = True
-        bot_thread.start()
-        print("🚀 Bot auto-started")
+    with bot_lock:
+        if not bot.is_running:
+            bot.is_running = True
+
+            bot_thread = threading.Thread(target=run_bot)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            log_event("AUTO_START_TRIGGERED")
+            print("🚀 Bot auto-started")
 
 
 auto_start()
