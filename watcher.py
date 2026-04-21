@@ -244,4 +244,12 @@ class Bot:
         self.is_running = False
         print("🛑 Bot stopped")
 
+if __name__ == "__main__":
+    bot = Bot(test_mode=False)
+    bot.start()
+
+
+
+
+
 
