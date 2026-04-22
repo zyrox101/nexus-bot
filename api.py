@@ -110,7 +110,7 @@ def start_bot():
 
 
 # ================= STOP BOT =================
-@app.route("/stop", methods=["POST"])
+@app.route("/start", methods=["GET", "POST"])
 def stop_bot():
     with bot_lock:
         if not bot.is_running:
