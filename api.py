@@ -7,18 +7,17 @@ from watcher import Bot
 
 app = Flask(__name__)
 
-# ---------------- BOT INSTANCE ----------------
+# ================= BOT INSTANCE =================
 bot = Bot(test_mode=False)
 
 bot_thread = None
 bot_lock = threading.Lock()
 
-# ---------------- LIVE LOG STORE ----------------
+# ================= LIVE LOG STORE =================
 live_logs = []
 
 
 def log_event(event):
-    """Store live bot events for UI"""
     global live_logs
 
     live_logs.append({
@@ -26,12 +25,11 @@ def log_event(event):
         "event": event
     })
 
-    # keep only last 100 logs
     if len(live_logs) > 100:
         live_logs = live_logs[-100:]
 
 
-# ---------------- WRAPPED BOT LOOP ----------------
+# ================= BOT LOOP =================
 def run_bot():
     log_event("BOT_THREAD_STARTED")
 
@@ -40,8 +38,9 @@ def run_bot():
             bot.get_balance()
             log_event(f"BALANCE_UPDATE: {bot.balance}")
 
+            # FIX: correct method name from watcher.py
             for market in bot.STABLE_MARKETS:
-                bot.process_market(market)
+                bot.process(market)
 
             log_event(f"SIGNAL: {bot.current_signal}")
 
@@ -51,13 +50,13 @@ def run_bot():
             log_event(f"ERROR: {str(e)}")
 
 
-# ---------------- HOME ----------------
+# ================= HOME =================
 @app.route('/')
 def home():
     return render_template('index.html')
 
 
-# ---------------- STATUS ----------------
+# ================= STATUS =================
 @app.route('/status')
 def status():
     return jsonify({
@@ -66,7 +65,7 @@ def status():
     })
 
 
-# ---------------- BALANCE ----------------
+# ================= BALANCE =================
 @app.route('/balance')
 def balance():
     return jsonify({
@@ -74,19 +73,19 @@ def balance():
     })
 
 
-# ---------------- TRADES ----------------
+# ================= TRADES =================
 @app.route('/trades')
 def trades():
     return jsonify(bot.trade_history[-10:][::-1])
 
 
-# ---------------- LIVE LOGS (NEW FIX) ----------------
+# ================= LOGS =================
 @app.route('/logs')
 def logs():
     return jsonify(live_logs[-50:][::-1])
 
 
-# ---------------- START BOT (SAFE FIX) ----------------
+# ================= START BOT =================
 @app.route("/start", methods=["POST"])
 def start_bot():
     global bot_thread
@@ -106,18 +105,29 @@ def start_bot():
     return jsonify({"status": "bot started"})
 
 
-# ---------------- STOP BOT ----------------
+# ================= STOP BOT =================
 @app.route("/stop", methods=["POST"])
 def stop_bot():
     with bot_lock:
+        if not bot.is_running:
+            return jsonify({"status": "already stopped"})
+
         bot.stop()
         log_event("BOT_STOPPED")
 
     return jsonify({"status": "bot stopped"})
 
 
-# ---------------- AUTO START (SAFE FIX) ----------------
-def auto_start():
+# ================= SAFE START CONTROL =================
+def safe_auto_start():
+    """
+    Only start if explicitly enabled via env variable
+    Prevents Render double-instance issues
+    """
+    if os.environ.get("AUTO_START", "false").lower() != "true":
+        print("AUTO START DISABLED")
+        return
+
     global bot_thread
 
     with bot_lock:
@@ -132,10 +142,7 @@ def auto_start():
             print("🚀 Bot auto-started")
 
 
-auto_start()
-
-
-# ---------------- RUN ----------------
+# ================= RUN =================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
