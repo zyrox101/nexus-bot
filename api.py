@@ -53,7 +53,11 @@ def run_bot():
 # ================= HOME =================
 @app.route('/')
 def home():
-    return render_template('index.html')
+    return jsonify({
+        "message": "NEXUS BOT RUNNING",
+        "status": bot.is_running
+    }) 
+
 
 
 # ================= STATUS =================
