@@ -16,8 +16,8 @@ class Bot:
         self.tracker = PerformanceTracker()
 
         self.balance = self.tracker.get_initial_balance() if test_mode else 0.0
-
         self.trade_history = read_trades()
+
         self.is_running = False
         self.current_signal = "HOLD"
 
@@ -28,7 +28,6 @@ class Bot:
         self.last_trade_time = 0
 
         self.positions = {}
-
         self.last_heartbeat = time.time()
 
     # ================= SIGNATURE =================
@@ -63,11 +62,14 @@ class Bot:
             return res.json() if res.status_code == 200 else None
 
         except Exception as e:
-            print("Request Error:", e)
+            print("❌ Request Error:", e)
             return None
 
     # ================= BALANCE =================
     def get_balance(self):
+        if self.test_mode:
+            return self.balance
+
         data = self.send_request("GET", "/v5/account/wallet-balance", {
             "accountType": "UNIFIED"
         })
@@ -84,7 +86,7 @@ class Bot:
         return self.balance
 
     # ================= MARKET DATA =================
-    def fetch_klines(self, symbol, limit=200):
+    def fetch_market_data(self, symbol, limit=200):
         url = f"{BASE_URL}/v5/market/kline"
 
         params = {
@@ -98,9 +100,6 @@ class Bot:
             r = requests.get(url, params=params, timeout=10)
             data = r.json()
 
-            if not isinstance(data, dict):
-                return None
-
             klines = data.get("result", {}).get("list", [])
             if not klines:
                 return None
@@ -113,12 +112,10 @@ class Bot:
             for col in ["open", "high", "low", "close"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
-            df = df.dropna()
-
-            return df
+            return df.dropna()
 
         except Exception as e:
-            print("Kline error:", e)
+            print("❌ Market Data Error:", e)
             return None
 
     # ================= RISK =================
@@ -129,6 +126,10 @@ class Bot:
 
     # ================= ORDER =================
     def place_order(self, side, qty, symbol):
+        if self.test_mode:
+            print(f"🧪 TEST ORDER: {side} {symbol} {qty}")
+            return {"test": True}
+
         res = self.send_request("POST", "/v5/order/create", {
             "category": "linear",
             "symbol": symbol,
@@ -138,73 +139,74 @@ class Bot:
         })
 
         if not res or res.get("retCode") != 0:
-            print("ORDER FAILED:", res)
+            print("❌ ORDER FAILED:", res)
             return None
 
-        print("ORDER EXECUTED:", side, symbol, qty)
+        print("✅ ORDER EXECUTED:", side, symbol, qty)
         return res
 
-    # ================= PROCESS =================
-    def process(self, symbol):
-        df = self.fetch_klines(symbol)
-        if df is None or len(df) < 50:
-            return
-
-        # 🔥 STRATEGY LAYER (EXTERNAL)
-        df = calculate_indicators(df)
-        signal = generate_signal(df)
-
-        self.current_signal = signal
-
-        price = df.iloc[-1]["close"]
-
-        print(f"{symbol} | {price} | {signal}")
-
-        # EXIT / ENTRY cooldown
-        if time.time() - self.last_trade_time < self.cooldown:
-            return
-
-        # ENTRY
-        if signal in ["BUY", "SELL"] and symbol not in self.positions:
-
-            qty = self.trade_size(price)
-            side = "Buy" if signal == "BUY" else "Sell"
-
-            res = self.place_order(side, qty, symbol)
-
-            if res:
-                self.positions[symbol] = {
-                    "side": signal,
-                    "entry": price
-                }
-
-                log_trade({
-                    "symbol": symbol,
-                    "type": "ENTRY",
-                    "side": side,
-                    "price": price,
-                    "balance": self.balance,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                })
-
-                self.last_trade_time = time.time()
-
-    # ================= LOOP =================
-    def start(self):
+    # ================= CORE LOOP =================
+    def run(self):
         self.is_running = True
-        print("BOT STARTED 🚀")
+        print("🚀 BOT STARTED")
 
-        while self.is_running:
-            self.get_balance()
+        while True:
+            try:
+                self.get_balance()
 
-            for m in self.STABLE_MARKETS:
-                self.process(m)
+                for symbol in self.STABLE_MARKETS:
 
-            self.last_heartbeat = time.time()
-            print("HEARTBEAT ✔ BOT ALIVE")
+                    data = self.fetch_market_data(symbol)
+                    if data is None or len(data) < 50:
+                        continue
 
-            time.sleep(10)
+                    # STRATEGY
+                    data = calculate_indicators(data)
+                    signal = generate_signal(data)
+                    self.current_signal = signal
+
+                    price = data.iloc[-1]["close"]
+
+                    print(f"{symbol} | {price} | {signal}")
+
+                    # cooldown
+                    if time.time() - self.last_trade_time < self.cooldown:
+                        continue
+
+                    # ENTRY LOGIC
+                    if signal in ["BUY", "SELL"] and symbol not in self.positions:
+
+                        qty = self.trade_size(price)
+                        side = "Buy" if signal == "BUY" else "Sell"
+
+                        res = self.place_order(side, qty, symbol)
+
+                        if res:
+                            self.positions[symbol] = {
+                                "side": signal,
+                                "entry": price
+                            }
+
+                            log_trade({
+                                "symbol": symbol,
+                                "type": "ENTRY",
+                                "side": side,
+                                "price": price,
+                                "balance": self.balance,
+                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                            })
+
+                            self.last_trade_time = time.time()
+
+                self.last_heartbeat = time.time()
+                print("💓 HEARTBEAT — BOT ALIVE")
+
+                time.sleep(10)
+
+            except Exception as e:
+                print("🔥 LOOP ERROR:", e)
+                time.sleep(5)
 
     def stop(self):
         self.is_running = False
-        print("BOT STOPPED 🛑")
+        print("🛑 BOT STOPPED")
