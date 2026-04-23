@@ -4,7 +4,10 @@ import threading
 from watcher import Bot
 from trade_logger import read_trades
 
+from flask_cors import CORS
+
 app = Flask(__name__)
+CORS(app)
 
 # ================= BOT INSTANCE =================
 bot = Bot(test_mode=True)
