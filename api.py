@@ -1,8 +1,8 @@
 from flask import Flask, jsonify
 import threading
-import time
 
 from watcher import Bot
+from trade_logger import read_trades
 
 app = Flask(__name__)
 
@@ -12,7 +12,12 @@ bot = Bot(test_mode=True)
 # ================= START BOT THREAD =================
 def start_bot():
     print("🚀 Starting bot thread...")
-    bot.run()
+
+    # FIX: ensure correct method is used
+    if hasattr(bot, "start"):
+        bot.start()
+    else:
+        bot.run()
 
 threading.Thread(target=start_bot, daemon=True).start()
 
@@ -48,6 +53,12 @@ def balance():
         "balance": bot.balance,
         "test_mode": bot.test_mode
     })
+
+
+# ================= FIXED TRADES ENDPOINT =================
+@app.route("/trades")
+def trades():
+    return jsonify(read_trades())
 
 
 # ================= RUN LOCAL =================
