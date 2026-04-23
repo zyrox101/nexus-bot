@@ -23,7 +23,11 @@ class Bot:
 
         self.STABLE_MARKETS = ["BTCUSDT", "ETHUSDT"]
 
+        # Risk system
         self.BASE_RISK = 0.02
+        self.TAKE_PROFIT = 0.03   # +3%
+        self.STOP_LOSS = 0.02     # -2%
+
         self.cooldown = 20
         self.last_trade_time = 0
 
@@ -145,12 +149,66 @@ class Bot:
         print("✅ ORDER EXECUTED:", side, symbol, qty)
         return res
 
+    # ================= POSITION CHECK =================
+    def check_exit(self, symbol, price):
+        if symbol not in self.positions:
+            return
+
+        position = self.positions[symbol]
+        entry = position["entry"]
+        side = position["side"]
+
+        change = (price - entry) / entry
+
+        # SELL position logic
+        if side == "SELL":
+            change = -change
+
+        # TAKE PROFIT
+        if change >= self.TAKE_PROFIT:
+            self.close_position(symbol, price, "TP")
+
+        # STOP LOSS
+        elif change <= -self.STOP_LOSS:
+            self.close_position(symbol, price, "SL")
+
+    # ================= CLOSE POSITION =================
+    def close_position(self, symbol, price, reason):
+        pos = self.positions[symbol]
+        side = "Sell" if pos["side"] == "BUY" else "Buy"
+
+        qty = self.trade_size(price)
+
+        self.place_order(side, qty, symbol)
+
+        profit = (price - pos["entry"])
+        if pos["side"] == "SELL":
+            profit = -profit
+
+        self.tracker.record_trade(profit)
+
+        log_trade({
+            "symbol": symbol,
+            "type": "EXIT",
+            "reason": reason,
+            "side": side,
+            "price": price,
+            "profit": profit,
+            "balance": self.balance,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+        print(f"🔴 POSITION CLOSED ({reason}): {symbol} | PnL: {profit}")
+
+        del self.positions[symbol]
+        self.last_trade_time = time.time()
+
     # ================= CORE LOOP =================
     def run(self):
         self.is_running = True
         print("🚀 BOT STARTED")
 
-        while True:
+        while self.is_running:
             try:
                 self.get_balance()
 
@@ -160,7 +218,6 @@ class Bot:
                     if data is None or len(data) < 50:
                         continue
 
-                    # STRATEGY
                     data = calculate_indicators(data)
                     signal = generate_signal(data)
                     self.current_signal = signal
@@ -169,11 +226,14 @@ class Bot:
 
                     print(f"{symbol} | {price} | {signal}")
 
+                    # CHECK EXIT FIRST (IMPORTANT)
+                    self.check_exit(symbol, price)
+
                     # cooldown
                     if time.time() - self.last_trade_time < self.cooldown:
                         continue
 
-                    # ENTRY LOGIC
+                    # ENTRY
                     if signal in ["BUY", "SELL"] and symbol not in self.positions:
 
                         qty = self.trade_size(price)
