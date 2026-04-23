@@ -5,6 +5,10 @@ class PerformanceTracker:
         self.losses = 0
         self.total_profit = 0.0
 
+    # ✅ FIX ADDED (prevents bot crash)
+    def get_initial_balance(self):
+        return 1000.0
+
     def record_trade(self, profit):
         self.total_trades += 1
         self.total_profit += profit
