@@ -23,10 +23,9 @@ class Bot:
 
         self.STABLE_MARKETS = ["BTCUSDT", "ETHUSDT"]
 
-        # Risk system
         self.BASE_RISK = 0.02
-        self.TAKE_PROFIT = 0.03   # +3%
-        self.STOP_LOSS = 0.02     # -2%
+        self.TAKE_PROFIT = 0.03
+        self.STOP_LOSS = 0.02
 
         self.cooldown = 20
         self.last_trade_time = 0
@@ -34,7 +33,7 @@ class Bot:
         self.positions = {}
         self.last_heartbeat = time.time()
 
-    # ================= SIGNATURE =================
+    # ================= SIGN =================
     def sign(self, params):
         sorted_params = dict(sorted(params.items()))
         query = "&".join([f"{k}={v}" for k, v in sorted_params.items()])
@@ -89,7 +88,7 @@ class Bot:
 
         return self.balance
 
-    # ================= MARKET DATA =================
+    # ================= MARKET =================
     def fetch_market_data(self, symbol, limit=200):
         url = f"{BASE_URL}/v5/market/kline"
 
@@ -122,7 +121,7 @@ class Bot:
             print("❌ Market Data Error:", e)
             return None
 
-    # ================= RISK =================
+    # ================= SIZE =================
     def trade_size(self, price):
         risk = self.balance * self.BASE_RISK
         qty = risk / price
@@ -149,61 +148,63 @@ class Bot:
         print("✅ ORDER EXECUTED:", side, symbol, qty)
         return res
 
-    # ================= POSITION CHECK =================
+    # ================= EXIT CHECK =================
     def check_exit(self, symbol, price):
         if symbol not in self.positions:
             return
 
-        position = self.positions[symbol]
-        entry = position["entry"]
-        side = position["side"]
+        pos = self.positions[symbol]
+        entry = pos["entry"]
+        side = pos["side"]
 
         change = (price - entry) / entry
-
-        # SELL position logic
         if side == "SELL":
             change = -change
 
-        # TAKE PROFIT
         if change >= self.TAKE_PROFIT:
             self.close_position(symbol, price, "TP")
 
-        # STOP LOSS
         elif change <= -self.STOP_LOSS:
             self.close_position(symbol, price, "SL")
 
-    # ================= CLOSE POSITION =================
+    # ================= CLOSE =================
     def close_position(self, symbol, price, reason):
         pos = self.positions[symbol]
-        side = "Sell" if pos["side"] == "BUY" else "Buy"
 
-        qty = self.trade_size(price)
+        entry = pos["entry"]
+        qty = pos["qty"]
+
+        side = "Sell" if pos["side"] == "BUY" else "Buy"
 
         self.place_order(side, qty, symbol)
 
-        profit = (price - pos["entry"])
+        profit = (price - entry) * qty
         if pos["side"] == "SELL":
             profit = -profit
+
+        self.balance += profit
+
+        result = "WIN" if profit > 0 else "LOSS"
 
         self.tracker.record_trade(profit)
 
         log_trade({
             "symbol": symbol,
-            "type": "EXIT",
-            "reason": reason,
-            "side": side,
-            "price": price,
+            "side": pos["side"],
+            "entry": entry,
+            "exit": price,
             "profit": profit,
             "balance": self.balance,
+            "result": result,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         })
 
-        print(f"🔴 POSITION CLOSED ({reason}): {symbol} | PnL: {profit}")
+        print(f"🔴 CLOSED {symbol} | {result} | PnL: {profit}")
 
         del self.positions[symbol]
         self.last_trade_time = time.time()
 
-    # ================= CORE LOOP =================
+    # ================= RUN =================
     def run(self):
         self.is_running = True
         print("🚀 BOT STARTED")
@@ -226,14 +227,11 @@ class Bot:
 
                     print(f"{symbol} | {price} | {signal}")
 
-                    # CHECK EXIT FIRST (IMPORTANT)
                     self.check_exit(symbol, price)
 
-                    # cooldown
                     if time.time() - self.last_trade_time < self.cooldown:
                         continue
 
-                    # ENTRY
                     if signal in ["BUY", "SELL"] and symbol not in self.positions:
 
                         qty = self.trade_size(price)
@@ -244,22 +242,14 @@ class Bot:
                         if res:
                             self.positions[symbol] = {
                                 "side": signal,
-                                "entry": price
+                                "entry": price,
+                                "qty": qty
                             }
-
-                            log_trade({
-                                "symbol": symbol,
-                                "type": "ENTRY",
-                                "side": side,
-                                "price": price,
-                                "balance": self.balance,
-                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                            })
 
                             self.last_trade_time = time.time()
 
                 self.last_heartbeat = time.time()
-                print("💓 HEARTBEAT — BOT ALIVE")
+                print("💓 HEARTBEAT")
 
                 time.sleep(10)
 
