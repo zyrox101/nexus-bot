@@ -15,8 +15,8 @@ class Bot:
         self.test_mode = test_mode
         self.tracker = PerformanceTracker()
 
-        self.balance = self.tracker.get_initial_balance() if test_mode else 0.0
-        self.trade_history = read_trades()
+        self.balance = 0.0 if not test_mode else self.tracker.get_initial_balance()
+self.trade_history = read_trades()
 
         self.is_running = False
         self.current_signal = "HOLD"
@@ -70,23 +70,20 @@ class Bot:
 
     # ================= BALANCE =================
     def get_balance(self):
-        if self.test_mode:
-            return self.balance
+    data = self.send_request("GET", "/v5/account/wallet-balance", {
+        "accountType": "UNIFIED"
+    })
 
-        data = self.send_request("GET", "/v5/account/wallet-balance", {
-            "accountType": "UNIFIED"
-        })
+    try:
+        coins = data["result"]["list"][0]["coin"]
+        for c in coins:
+            if c["coin"] == "USDT":
+                self.balance = float(c["walletBalance"])
+                return self.balance
+    except Exception as e:
+        print("Balance fetch error:", e)
 
-        try:
-            coins = data["result"]["list"][0]["coin"]
-            for c in coins:
-                if c["coin"] == "USDT":
-                    self.balance = float(c["walletBalance"])
-                    return self.balance
-        except:
-            pass
-
-        return self.balance
+    return self.balance
 
     # ================= MARKET =================
     def fetch_market_data(self, symbol, limit=200):

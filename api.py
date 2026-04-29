@@ -10,7 +10,7 @@ app = Flask(__name__)
 CORS(app)
 
 # ================= BOT INSTANCE =================
-bot = Bot(test_mode=True)
+bot = Bot(test_mode=False)
 bot_thread = None
 
 
